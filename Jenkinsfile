@@ -6,7 +6,7 @@ pipeline {
         stage('Checkout Code') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/YOUR_USERNAME/devsecops-pipeline.git'
+                    url: 'https://github.com/Rupali-shelke/devsecops-pipeline.git'
             }
         }
 
