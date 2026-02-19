@@ -1,27 +1,88 @@
 pipeline {
     agent any
 
+    environment {
+        IMAGE_NAME = "devsecops-app"
+        DOCKERHUB_CREDENTIALS = "dockerhub"
+        DOCKERHUB_REPO = "rupalishelake/devsecops-pipeline"
+        SONAR_HOST_URL = "http://192.168.80.130:9000"
+
+        VAULT_ADDR = "http://192.168.80.130:8200"
+        VAULT_SECRET_PATH = "secret/devsecops"
+    }
+
     stages {
 
-        stage('Checkout Code') {
+        stage('Docker Build') {
             steps {
-                git branch: 'main',
-                    credentialsId: 'github-creds',
-                    url: 'https://github.com/Rupali-shelke/devsecops-pipeline.git'
+                echo "🔹 Building Docker image"
+                sh "docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} src/"
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
-                withSonarQubeEnv('SonarQube') {
-                    sh '''
+                withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
+                    echo "🔹 Running SonarQube Scanner"
+                    sh """
                     sonar-scanner \
-                    -Dsonar.projectKey=devsecops-python \
-                    -Dsonar.sources=. \
-                    -Dsonar.language=py
-                    '''
+                        -Dsonar.projectKey=devsecops-Project \
+                        -Dsonar.sources=src \
+                        -Dsonar.host.url=${SONAR_HOST_URL} \
+                        -Dsonar.login=${SONAR_TOKEN} \
+                        -Dsonar.python.version=3.9
+                    """
                 }
             }
+        }
+
+        stage('Trivy Image Scan') {
+            steps {
+                echo "🔹 Scanning Docker image for vulnerabilities"
+                sh """
+                trivy image \
+                    --severity HIGH,CRITICAL \
+                    --exit-code 0 \
+                    ${IMAGE_NAME}:${BUILD_NUMBER}
+                """
+            }
+        }
+
+        stage('Fetch Secrets from Vault') {
+            steps {
+                withCredentials([string(credentialsId: 'vault-token', variable: 'VAULT_TOKEN')]) {
+                    echo "🔹 Fetching secrets from Vault"
+                    sh """
+                    export VAULT_ADDR=${VAULT_ADDR}
+                    export VAULT_TOKEN=${VAULT_TOKEN}
+
+                    vault kv get -format=json ${VAULT_SECRET_PATH} > vault_secrets.json
+                    echo "Secrets fetched from Vault successfully"
+                    """
+                }
+            }
+        }
+
+        stage('Docker Push') {
+            steps {
+                echo "🔹 Pushing Docker image to Docker Hub"
+                withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh """
+                    echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                    docker tag ${IMAGE_NAME}:${BUILD_NUMBER} ${DOCKERHUB_REPO}:${BUILD_NUMBER}
+                    docker push ${DOCKERHUB_REPO}:${BUILD_NUMBER}
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ DevSecOps pipeline completed successfully"
+        }
+        failure {
+            echo "❌ Pipeline failed — check logs"
         }
     }
 }
